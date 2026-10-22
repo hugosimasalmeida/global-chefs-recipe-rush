@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <title>Global Chefs: Recipe Rush</title>
+    <link rel="manifest" href="manifest.json">
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('./service-worker.js')
+            .then(reg => console.log('SW registered', reg))
+            .catch(err => console.log('SW failed', err));
+        });
+      }
+    </script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #1a1a2e; color: white; overflow: hidden; touch-action: none; }
+        #game-container { width: 100vw; height: 100vh; position: relative; display: flex; flex-direction: column; }
+        canvas { display: block; width: 100%; height: 100%; }
+        .ui-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
+        .ui-overlay * { pointer-events: auto; }
+        .screen { position: absolute; width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; background: rgba(0,0,0,0.7); transition: opacity 0.5s; }
+        .hidden { opacity: 0; pointer-events: none; }
+        .title { font-size: 2.5rem; font-weight: bold; text-shadow: 0 0 20px #ffd700; margin-bottom: 2rem; }
+        .btn { background: linear-gradient(145deg, #ff6b6b, #ee5a24); border: none; padding: 15px 30px; font-size: 1.2rem; border-radius: 50px; color: white; cursor: pointer; margin: 10px; transition: transform 0.2s, box-shadow 0.2s; box-shadow: 0 5px 15px rgba(0,0,0,0.3); }
+        .btn:hover, .btn:active { transform: scale(1.05); box-shadow: 0 8px 25px rgba(255,107,107,0.5); }
+        .country-select { display: flex; flex-wrap: wrap; justify-content: center; gap: 20px; }
+        .country-card { width: 200px; height: 250px; background: rgba(255,255,255,0.1); border-radius: 20px; overflow: hidden; cursor: pointer; transition: transform 0.3s; backdrop-filter: blur(10px); }
+        .country-card:hover { transform: translateY(-10px); }
+        .country-card img { width: 100%; height: 180px; object-fit: cover; }
+        .country-card h3 { text-align: center; padding: 10px; }
+        #cooking-ui { display: none; flex-direction: column; height: 100%; }
+        #kitchen-bg { position: absolute; width: 100%; height: 100%; object-fit: cover; z-index: -1; opacity: 0.6; }
+        #chef-display { position: absolute; bottom: 20px; left: 20px; width: 150px; height: auto; z-index: 10; filter: drop-shadow(0 0 10px rgba(0,0,0,0.5)); }
+        #recipe-info { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.6); padding: 15px 30px; border-radius: 20px; text-align: center; backdrop-filter: blur(5px); }
+        #ingredients { position: absolute; bottom: 100px; left: 50%; transform: translateX(-50%); display: flex; gap: 15px; flex-wrap: wrap; justify-content: center; max-width: 90%; }
+        .ingredient { width: 80px; height: 80px; background: rgba(255,255,255,0.2); border-radius: 15px; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: transform 0.2s; border: 3px solid transparent; }
+        .ingredient img { max-width: 70%; max-height: 70%; object-fit: contain; }
+        .ingredient:active { transform: scale(0.9); }
+        .ingredient.correct { border-color: #4cd137; animation: pulse 0.5s; }
+        .ingredient.wrong { border-color: #e84118; animation: shake 0.3s; }
+        @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }
+        @keyframes shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }
+        #progress-bar { position: absolute; top: 80px; left: 50%; transform: translateX(-50%); width: 60%; height: 20px; background: rgba(255,255,255,0.2); border-radius: 10px; overflow: hidden; }
+        #progress-fill { height: 100%; background: linear-gradient(90deg, #ff9ff3, #feca57); width: 0%; transition: width 0.3s; }
+        #score { position: absolute; top: 20px; right: 20px; font-size: 1.5rem; background: rgba(0,0,0,0.5); padding: 10px 20px; border-radius: 15px; }
+        #plate { position: absolute; bottom: 30%; left: 50%; transform: translateX(-50%); width: 200px; height: 200px; border-radius: 50%; background: rgba(255,255,255,0.1); display: none; align-items: center; justify-content: center; }
+        #plate img { max-width: 90%; max-height: 90%; border-radius: 50%; }
+        .particle { position: absolute; pointer-events: none; border-radius: 50%; animation: float 1s ease-out forwards; }
+        @keyframes float { to { transform: translateY(-100px) scale(0); opacity: 0; } }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <div id="menu-screen" class="screen">
+            <h1 class="title">Global Chefs<br>Recipe Rush</h1>
+            <p style="margin-bottom: 20px; text-align: center;">Play as a chef from around the world!<br>Cook authentic recipes with smooth controls.</p>
+            <button class="btn" onclick="showCountries()">Start Cooking</button>
+        </div>
+        <div id="country-screen" class="screen hidden">
+            <h2 class="title">Choose Your Chef</h2>
+            <div class="country-select" id="country-grid"></div>
+            <button class="btn" onclick="showMenu()">Back</button>
+        </div>
+        <div id="cooking-screen" class="screen hidden" style="background: none;">
+            <img id="kitchen-bg" src="" alt="kitchen">
+            <img id="chef-display" src="" alt="chef">
+            <div id="recipe-info">
+                <h3 id="recipe-name">Recipe</h3>
+                <p id="recipe-step">Select ingredients in order</p>
+            </div>
+            <div id="score">Score: 0</div>
+            <div id="progress-bar"><div id="progress-fill"></div></div>
+            <div id="plate"></div>
+            <div id="ingredients"></div>
+            <button class="btn" style="position: absolute; bottom: 20px; right: 20px;" onclick="backToMenu()">Menu</button>
+        </div>
+    </div>
+    <script>
+        const countries = [
+            {
+                id: 'italy',
+                name: 'Italy',
+                chef: 'imagine_images/X5B3k.jpg',
+                bg: 'imagine_images/lJRb0.jpg',
+                recipe: 'Spaghetti Carbonara',
+                dish: 'imagine_images/M1hXi.jpg',
+                steps: [
+                    { name: 'Pasta', img: 'imagine_images/2lzzk.jpg' },
+                    { name: 'Egg', img: null, color: '#f1c40f' },
+                    { name: 'Cheese', img: null, color: '#f39c12' },
+                    { name: 'Bacon', img: null, color: '#e74c3c' }
+                ]
+            },
+            {
+                id: 'japan',
+                name: 'Japan',
+                chef: 'imagine_images/Eswlu.jpg',
+                bg: 'imagine_images/hmocN.jpg',
+                recipe: 'Nigiri Sushi',
+                dish: 'imagine_images/eFI5J.jpg',
+                steps: [
+                    { name: 'Rice', img: 'imagine_images/NkGiQ.jpg' },
+                    { name: 'Fish', img: null, color: '#e74c3c' },
+                    { name: 'Seaweed', img: null, color: '#27ae60' },
+                    { name: 'Wasabi', img: null, color: '#2ecc71' }
+                ]
+            },
+            {
+                id: 'mexico',
+                name: 'Mexico',
+                chef: 'imagine_images/OADeR.jpg',
+                bg: 'imagine_images/lJRb0.jpg', // reuse for now
+                recipe: 'Tacos al Pastor',
+                dish: 'imagine_images/IyH6N.jpg',
+                steps: [
+                    { name: 'Tortilla', img: null, color: '#f39c12' },
+                    { name: 'Pork', img: 'imagine_images/mCcvQ.jpg' },
+                    { name: 'Pineapple', img: null, color: '#f1c40f' },
+                    { name: 'Onion', img: 'imagine_images/hBmz7.jpg' }
+                ]
+            },
+            {
+                id: 'india',
+                name: 'India',
+                chef: 'imagine_images/Pog7A.jpg',
+                bg: 'imagine_images/hmocN.jpg',
+                recipe: 'Butter Chicken',
+                dish: 'imagine_images/xSvcX.jpg',
+                steps: [
+                    { name: 'Chicken', img: 'imagine_images/mCcvQ.jpg' },
+                    { name: 'Tomato', img: 'imagine_images/hBmz7.jpg' },
+                    { name: 'Spices', img: null, color: '#e67e22' },
+                    { name: 'Butter', img: null, color: '#f1c40f' },
+                    { name: 'Rice', img: 'imagine_images/NkGiQ.jpg' }
+                ]
+            },
+            {
+                id: 'portugal',
+                name: 'Portugal',
+                chef: 'imagine_images/6YSXn.jpg',
+                bg: 'imagine_images/lJRb0.jpg',
+                recipe: 'Pastel de Nata',
+                dish: 'imagine_images/5RfRo.jpg',
+                steps: [
+                    { name: 'Pastry', img: null, color: '#f39c12' },
+                    { name: 'Custard', img: null, color: '#f1c40f' },
+                    { name: 'Egg', img: null, color: '#f39c12' },
+                    { name: 'Cinnamon', img: null, color: '#d35400' }
+                ]
+            },
+            {
+                id: 'france',
+                name: 'France',
+                chef: 'imagine_images/iOj4n.jpg',
+                bg: 'imagine_images/lJRb0.jpg',
+                recipe: 'Ratatouille',
+                dish: 'imagine_images/3VC7x.jpg',
+                steps: [
+                    { name: 'Eggplant', img: null, color: '#8e44ad' },
+                    { name: 'Zucchini', img: null, color: '#27ae60' },
+                    { name: 'Tomato', img: 'imagine_images/hBmz7.jpg' },
+                    { name: 'Herbs', img: null, color: '#2ecc71' }
+                ]
+            },
+            {
+                id: 'spain',
+                name: 'Spain',
+                chef: 'imagine_images/wi5x9.jpg',
+                bg: 'imagine_images/lJRb0.jpg',
+                recipe: 'Paella',
+                dish: 'imagine_images/RN2z8.jpg',
+                steps: [
+                    { name: 'Rice', img: 'imagine_images/NkGiQ.jpg' },
+                    { name: 'Seafood', img: null, color: '#e74c3c' },
+                    { name: 'Saffron', img: null, color: '#f1c40f' },
+                    { name: 'Peppers', img: null, color: '#e67e22' }
+                ]
+            },
+            {
+                id: 'brazil',
+                name: 'Brazil',
+                chef: 'imagine_images/RiNpj.jpg',
+                bg: 'imagine_images/hmocN.jpg',
+                recipe: 'Feijoada',
+                dish: 'imagine_images/VkdMZ.jpg',
+                steps: [
+                    { name: 'Black Beans', img: null, color: '#2c3e50' },
+                    { name: 'Pork', img: 'imagine_images/mCcvQ.jpg' },
+                    { name: 'Sausage', img: null, color: '#c0392b' },
+                    { name: 'Rice', img: 'imagine_images/NkGiQ.jpg' }
+                ]
+            },
+            {
+                id: 'greece',
+                name: 'Greece',
+                chef: 'imagine_images/xWUsf.jpg',
+                bg: 'imagine_images/lJRb0.jpg',
+                recipe: 'Moussaka',
+                dish: 'imagine_images/pBjBx.jpg',
+                steps: [
+                    { name: 'Eggplant', img: null, color: '#8e44ad' },
+                    { name: 'Meat', img: 'imagine_images/mCcvQ.jpg' },
+                    { name: 'Bechamel', img: null, color: '#f1c40f' },
+                    { name: 'Tomato', img: 'imagine_images/hBmz7.jpg' }
+                ]
+            },
+            {
+                id: 'turkey',
+                name: 'Turkey',
+                chef: 'imagine_images/JCPcY.jpg',
+                bg: 'imagine_images/hmocN.jpg',
+                recipe: 'Doner Kebab',
+                dish: 'imagine_images/eG64u.jpg',
+                steps: [
+                    { name: 'Meat', img: 'imagine_images/mCcvQ.jpg' },
+                    { name: 'Bread', img: null, color: '#d35400' },
+                    { name: 'Onion', img: null, color: '#ecf0f1' },
+                    { name: 'Tomato', img: 'imagine_images/hBmz7.jpg' }
+                ]
+            },
+            {
+                id: 'china',
+                name: 'China',
+                chef: 'imagine_images/sSjtU.jpg',
+                bg: 'imagine_images/hmocN.jpg',
+                recipe: 'Peking Duck',
+                dish: 'imagine_images/PELmR.jpg',
+                steps: [
+                    { name: 'Duck', img: null, color: '#e74c3c' },
+                    { name: 'Pancakes', img: null, color: '#f39c12' },
+                    { name: 'Scallions', img: null, color: '#27ae60' },
+                    { name: 'Sauce', img: null, color: '#c0392b' }
+                ]
+            }
+        ];
+
+        let currentCountry = null;
+        let currentStep = 0;
+        let score = 0;
+        let gameActive = false;
+        let particles = [];
+
+        function showMenu() {
+            document.getElementById('menu-screen').classList.remove('hidden');
+            document.getElementById('country-screen').classList.add('hidden');
+            document.getElementById('cooking-screen').classList.add('hidden');
+        }
+
+        function showCountries() {
+            document.getElementById('menu-screen').classList.add('hidden');
+            document.getElementById('country-screen').classList.remove('hidden');
+            const grid = document.getElementById('country-grid');
+            grid.innerHTML = '';
+            countries.forEach(c => {
+                const card = document.createElement('div');
+                card.className = 'country-card';
+                card.innerHTML = `<img src="${c.chef}" alt="${c.name}"><h3>${c.name}</h3>`;
+                card.onclick = () => startCooking(c);
+                grid.appendChild(card);
+            });
+        }
+
+        function startCooking(country) {
+            currentCountry = country;
+            currentStep = 0;
+            score = 0;
+            gameActive = true;
+            document.getElementById('country-screen').classList.add('hidden');
+            document.getElementById('cooking-screen').classList.remove('hidden');
+            document.getElementById('kitchen-bg').src = country.bg;
+            document.getElementById('chef-display').src = country.chef;
+            document.getElementById('recipe-name').textContent = country.recipe;
+            document.getElementById('score').textContent = `Score: ${score}`;
+            document.getElementById('progress-fill').style.width = '0%';
+            document.getElementById('plate').style.display = 'none';
+            document.getElementById('plate').innerHTML = '';
+            renderIngredients();
+            updateStepText();
+        }
+
+        function renderIngredients() {
+            const container = document.getElementById('ingredients');
+            container.innerHTML = '';
+            // Shuffle steps for challenge, but keep track of correct order
+            const shuffled = [...currentCountry.steps].sort(() => Math.random() - 0.5);
+            shuffled.forEach((step, idx) => {
+                const div = document.createElement('div');
+                div.className = 'ingredient';
+                div.dataset.name = step.name;
+                if (step.img) {
+                    div.innerHTML = `<img src="${step.img}" alt="${step.name}">`;
+                } else {
+                    div.style.background = step.color || '#3498db';
+                    div.innerHTML = `<span style="font-size:0.8rem; text-align:center;">${step.name}</span>`;
+                }
+                div.onclick = () => selectIngredient(step.name, div);
+                container.appendChild(div);
+            });
+        }
+
+        function selectIngredient(name, element) {
+            if (!gameActive) return;
+            const expected = currentCountry.steps[currentStep].name;
+            if (name === expected) {
+                element.classList.add('correct');
+                score += 100;
+                currentStep++;
+                createParticles(element);
+                updateProgress();
+                if (currentStep >= currentCountry.steps.length) {
+                    completeRecipe();
+                } else {
+                    updateStepText();
+                }
+                setTimeout(() => element.classList.remove('correct'), 500);
+            } else {
+                element.classList.add('wrong');
+                score = Math.max(0, score - 20);
+                setTimeout(() => element.classList.remove('wrong'), 300);
+            }
+            document.getElementById('score').textContent = `Score: ${score}`;
+        }
+
+        function updateStepText() {
+            if (currentStep < currentCountry.steps.length) {
+                document.getElementById('recipe-step').textContent = `Next: ${currentCountry.steps[currentStep].name}`;
+            }
+        }
+
+        function updateProgress() {
+            const pct = (currentStep / currentCountry.steps.length) * 100;
+            document.getElementById('progress-fill').style.width = pct + '%';
+        }
+
+        function completeRecipe() {
+            gameActive = false;
+            document.getElementById('ingredients').innerHTML = '';
+            document.getElementById('recipe-step').textContent = 'Perfect! Dish complete!';
+            const plate = document.getElementById('plate');
+            plate.style.display = 'flex';
+            plate.innerHTML = `<img src="${currentCountry.dish}" alt="dish">`;
+            score += 200;
+            document.getElementById('score').textContent = `Score: ${score}`;
+            // More particles
+            for (let i = 0; i < 20; i++) createParticles(plate);
+        }
+
+        function createParticles(element) {
+            const rect = element.getBoundingClientRect();
+            for (let i = 0; i < 5; i++) {
+                const p = document.createElement('div');
+                p.className = 'particle';
+                p.style.left = (rect.left + rect.width/2 + (Math.random()-0.5)*40) + 'px';
+                p.style.top = (rect.top + rect.height/2) + 'px';
+                p.style.width = p.style.height = (5 + Math.random()*10) + 'px';
+                p.style.background = `hsl(${Math.random()*60 + 30}, 100%, 60%)`;
+                document.body.appendChild(p);
+                setTimeout(() => p.remove(), 1000);
+            }
+        }
+
+        function backToMenu() {
+            gameActive = false;
+            showMenu();
+        }
+
+        // Init
+        showMenu();
+
+        // Prevent zoom/scroll on mobile
+        document.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
+    </script>
+</body>
+</html>
